@@ -166,6 +166,10 @@ private:
 	int         m_yoffs = 0;
 	int         m_texel_width = 0;
 	int         m_is_mk4b = 0;
+
+	bool lighting_enabled = true;
+	char lighting_algorithm = 1;
+	bool texture_filtering_enabled = true;
 };
 
 class invasnab_state : public midzeus_state

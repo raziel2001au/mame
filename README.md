@@ -1,4 +1,17 @@
-# MAME
+# MAME - WITH MINOR ZEUS ENHANCEMENTS
+
+## Enhancements of this fork
+
+This version of MAME includes some minor enhancements to the Zeus emulation code for MK4. I've added the ability to toggle texture filtering as I noticed the emulator in Mortal Kombat Legacy Kollection lacks texture filtering and I wanted to see what this would look like in practice.
+
+While I was in there, I decided to also add a basic lighting implementation (Lambertian lighting model without distance attentuation), the problem is the way the Zeus hardware presents light locations, it's very cryptic and I don't really want to spend the time to figure it out, so I did what I could with the limited time I spent on it. It's not accurate, it's just meant to be an improvement over what was there before, which is nothing.
+
+I've introduced a number of hardcoded keyboard buttons that toggle the different features:
+* [ : Toggle experimental lighting on and off. Lighting is enabled at startup.
+* ] : Toggle methods of lighting (at this stage it just ramps the intensity in a way that makes the output brighter).
+* \ : Toggle texture filtering on and off. Texture filtering is enabled by default. Toggle off to match the output seen in the Legacy Kollection trailer.
+
+This is just a fork for me to mess around a bit, consider it experimental and unsupported.
 
 ## What is MAME?
 

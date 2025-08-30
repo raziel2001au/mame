@@ -296,6 +296,24 @@ uint32_t midzeus_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 {
 	m_poly->wait("VIDEO_UPDATE");
 
+	if (machine().input().code_pressed_once(KEYCODE_OPENBRACE))
+	{
+		lighting_enabled = !lighting_enabled;
+	}
+
+	if (machine().input().code_pressed_once(KEYCODE_CLOSEBRACE))
+	{
+		if (++lighting_algorithm > 2)
+		{
+			lighting_algorithm = 1;
+		}
+	}
+
+	if (machine().input().code_pressed_once(KEYCODE_BACKSLASH))
+	{
+		texture_filtering_enabled = !texture_filtering_enabled;
+	}
+
 	if (DEBUG_KEYS && machine().input().code_pressed(KEYCODE_V)) // waveram drawing case
 	{
 		const void *base;
@@ -1110,15 +1128,88 @@ void midzeus_renderer::zeus_draw_quad(int long_fmt, const uint32_t *databuffer, 
 				return;
 		}
 
-		if (long_fmt)
+		if (long_fmt && m_state.lighting_enabled)
 		{
-#if 0
-			// TODO: Lighting
+			// Directional lighting using per-vertex normal
 			uint32_t inormal = databuffer[10 + i];
 			int32_t xn = util::sext((inormal >>  0) & 0x3ff, 10);
 			int32_t yn = util::sext((inormal >> 10) & 0x3ff, 10);
 			int32_t zn = util::sext((inormal >> 20) & 0x3ff, 10);
-#endif
+
+			// Transforms normal into screen space
+			int32_t rotn_x = xn * zeus_matrix[0][0] + yn * zeus_matrix[0][1] + zn * zeus_matrix[0][2];
+			int32_t rotn_y = xn * zeus_matrix[1][0] + yn * zeus_matrix[1][1] + zn * zeus_matrix[1][2];
+			int32_t rotn_z = xn * zeus_matrix[2][0] + yn * zeus_matrix[2][1] + zn * zeus_matrix[2][2];
+
+			// Normalize normal
+			float nx = rotn_x / 65536.0f;
+			float ny = rotn_y / 65536.0f;
+			float nz = rotn_z / 65536.0f;
+			float nlen = std::sqrt(nx*nx + ny*ny + nz*nz);
+			if (nlen > 0.0001f) {
+				nx /= nlen;
+				ny /= nlen;
+				nz /= nlen;
+			}
+
+			// Compute light direction as vector from vertex to light position
+			float vx = (float)x / 65536.0f;
+			float vy = (float)y / 65536.0f;
+			float vz = (float)z / 65536.0f;
+
+			float lightx = (float)m_state.m_zeus_light[0];
+			float lighty = (float)m_state.m_zeus_light[1];
+			float lightz = (float)m_state.m_zeus_light[2];
+
+			float lx = lightx - vx;
+			float ly = lighty - vy;
+			float lz = lightz - vz;
+
+			float llen = std::sqrt(lx*lx + ly*ly + lz*lz);
+			if (llen > 0.0001f) {
+				lx /= llen;
+				ly /= llen;
+				lz /= llen;
+			}
+
+			// Lambertian diffuse
+			float diffuse = nx*lx + ny*ly + nz*lz;
+			if (diffuse < 0.0f) diffuse = 0.0f;
+			if (diffuse > 1.0f) diffuse = 1.0f;
+
+			// Log vertex and light info for debugging
+			// if (logit)
+			// {
+			// 	m_state.logerror("\nLighting: diffuse=%f vx=%f vy=%f vz=%f   m_zeus_light=(%f,%f,%f)   xo=%f yo=%f zo=%f   lx=%f ly=%f lz=%f\n",
+			// 		diffuse, vx, vy, vz, lightx, lighty, lightz, xo, yo, zo, lx, ly, lz);
+			// }
+
+			if (m_state.lighting_algorithm == 2) 
+			{
+				// Exponentially increase diffuse intensity
+				diffuse = std::pow(diffuse, 0.5);
+			}
+
+			// Add ambient
+			float ambient = 0.05f;
+			//float intensity = ambient + (1.0f - ambient) * diffuse;
+			float intensity = ambient + diffuse;
+			
+			// if (m_state.lighting_algorithm == 2) 
+			// {
+			// 	// Exponentially increase intensity
+			// 	intensity = std::pow(intensity, 0.50);
+			// }
+
+			// Clamp intensity
+			if (intensity > 1.0f) intensity = 1.0f;
+
+			// Store as per-vertex intensity
+			vert[i].p[3] = (uint32_t)(intensity * 0xffff);
+		}
+		else
+		{
+			vert[i].p[3] = 0xffff;
 		}
 
 		vert[i].x = x;
@@ -1126,7 +1217,6 @@ void midzeus_renderer::zeus_draw_quad(int long_fmt, const uint32_t *databuffer, 
 		vert[i].p[0] = z;
 		vert[i].p[1] = u << ushift;
 		vert[i].p[2] = v << vshift;
-		vert[i].p[3] = 0xffff;
 
 #if (VERBOSE & LOG_QUAD)
 		if (logit)
@@ -1276,34 +1366,55 @@ void midzeus_renderer::render_poly(int32_t scanline, const extent_t& extent, con
 			{
 				uint32_t const u0 = curu >> 8;
 				uint32_t const v0 = object.voffset + (curv >> 8);
-				uint32_t const u1 = u0 + 1;
-				uint32_t const v1 = v0 + 1;
 
-				uint8_t texels[4];
-
-				texels[0] = object.get_texel(texbase, v0, u0, texwidth);
-				texels[1] = object.get_texel(texbase, v0, u1, texwidth);
-				texels[2] = object.get_texel(texbase, v1, u0, texwidth);
-				texels[3] = object.get_texel(texbase, v1, u1, texwidth);
-
-				if (texels[0] != transcolor)
+				if (m_state.texture_filtering_enabled)
 				{
-					rgb_t color[4] = {0, 0, 0, 0};
+					uint32_t const u1 = u0 + 1;
+					uint32_t const v1 = v0 + 1;
 
-					for (uint32_t i = 0; i < 4; ++i)
+					uint8_t texels[4];
+
+					texels[0] = object.get_texel(texbase, v0, u0, texwidth);
+					texels[1] = object.get_texel(texbase, v0, u1, texwidth);
+					texels[2] = object.get_texel(texbase, v1, u0, texwidth);
+					texels[3] = object.get_texel(texbase, v1, u1, texwidth);
+
+					if (texels[0] != transcolor)
 					{
-						uint16_t const pix = WAVERAM_READ16(palbase, texels[i]);
+						rgb_t color[4] = {0, 0, 0, 0};
 
-						color[i].set_r(pal5bit(pix >> 10));
-						color[i].set_g(pal5bit(pix >> 5));
-						color[i].set_b(pal5bit(pix));
+						for (uint32_t i = 0; i < 4; ++i)
+						{
+							uint16_t const pix = WAVERAM_READ16(palbase, texels[i]);
+
+							color[i].set_r(pal5bit(pix >> 10));
+							color[i].set_g(pal5bit(pix >> 5));
+							color[i].set_b(pal5bit(pix));
+						}
+
+						src = rgbaint_t::bilinear_filter(color[0], color[1], color[2], color[3], curu & 0xff, curv & 0xff);
 					}
-
-					src = rgbaint_t::bilinear_filter(color[0], color[1], color[2], color[3], curu & 0xff, curv & 0xff);
+					else
+					{
+						src_valid = false;
+					}
 				}
 				else
 				{
-					src_valid = false;
+					uint8_t texel = object.get_texel(texbase, v0, u0, texwidth);
+
+					if (texel != transcolor)
+					{
+						uint16_t const pix = WAVERAM_READ16(palbase, texel);
+
+						src.set_r(pal5bit(pix >> 10));
+						src.set_g(pal5bit(pix >> 5));
+						src.set_b(pal5bit(pix));
+					}
+					else
+					{
+						src_valid = false;
+					}
 				}
 			}
 
