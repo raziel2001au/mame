@@ -54,11 +54,14 @@ public:
 	void render_poly(int32_t scanline, const extent_t& extent, const mz_poly_extra_data& object, int threadid);
 	void render_poly_solid_fixedz(int32_t scanline, const extent_t& extent, const mz_poly_extra_data& object, int threadid);
 
-	void zeus_draw_quad(int long_fmt, const uint32_t *databuffer, uint32_t texdata, bool logit);
-	void zeus_draw_debug_quad(const rectangle& rect, const vertex_t* vert);
+    void zeus_draw_quad(int long_fmt, const uint32_t *databuffer, uint32_t texdata, bool logit);
+    void zeus_draw_debug_quad(const rectangle& rect, const vertex_t* vert);
 
 private:
 	midzeus_state& m_state;
+
+	void calculate_lighting_algorithm_1(const uint32_t *databuffer, uint32_t i, int16_t zeus_matrix[3][3], int64_t x, int64_t y, int64_t z, vertex_t vert[4]);
+	void calculate_lighting_algorithm_2(const uint32_t *databuffer, uint32_t i, int16_t zeus_matrix[3][3], int64_t x, int64_t y, int64_t z, vertex_t vert[4]);
 };
 
 typedef midzeus_renderer::vertex_t poly_vertex;
@@ -168,7 +171,7 @@ private:
 	int         m_is_mk4b = 0;
 
 	bool lighting_enabled = true;
-	char lighting_algorithm = 1;
+	char lighting_algorithm = 3;
 	bool texture_filtering_enabled = true;
 };
 

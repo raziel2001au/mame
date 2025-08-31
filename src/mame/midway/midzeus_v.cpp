@@ -76,6 +76,17 @@ static inline uint8_t get_texel_alt_8bit(const void *base, int y, int x, int wid
 
 /*************************************
  *
+ *  Lighting statics
+ *
+ *************************************/
+static float lightx = 1000.0f;
+static float lighty = 500.0f;
+static float lightz = 3000.0f;
+static float maxLightDistance = 20000.0f;
+
+
+/*************************************
+ *
  *  Macros
  *
  *************************************/
@@ -296,6 +307,8 @@ uint32_t midzeus_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 {
 	m_poly->wait("VIDEO_UPDATE");
 
+	//osd_printf_verbose("Light=%f,%f,%f   MaxDistance=%f\n", lightx, lighty, lightz, maxLightDistance);
+
 	if (machine().input().code_pressed_once(KEYCODE_OPENBRACE))
 	{
 		lighting_enabled = !lighting_enabled;
@@ -303,7 +316,7 @@ uint32_t midzeus_state::screen_update(screen_device &screen, bitmap_ind16 &bitma
 
 	if (machine().input().code_pressed_once(KEYCODE_CLOSEBRACE))
 	{
-		if (++lighting_algorithm > 2)
+		if (++lighting_algorithm > 3)
 		{
 			lighting_algorithm = 1;
 		}
@@ -1128,85 +1141,14 @@ void midzeus_renderer::zeus_draw_quad(int long_fmt, const uint32_t *databuffer, 
 				return;
 		}
 
-		if (long_fmt && m_state.lighting_enabled)
+		if (long_fmt && m_state.lighting_enabled && m_state.lighting_algorithm < 3)
 		{
-			// Directional lighting using per-vertex normal
-			uint32_t inormal = databuffer[10 + i];
-			int32_t xn = util::sext((inormal >>  0) & 0x3ff, 10);
-			int32_t yn = util::sext((inormal >> 10) & 0x3ff, 10);
-			int32_t zn = util::sext((inormal >> 20) & 0x3ff, 10);
-
-			// Transforms normal into screen space
-			int32_t rotn_x = xn * zeus_matrix[0][0] + yn * zeus_matrix[0][1] + zn * zeus_matrix[0][2];
-			int32_t rotn_y = xn * zeus_matrix[1][0] + yn * zeus_matrix[1][1] + zn * zeus_matrix[1][2];
-			int32_t rotn_z = xn * zeus_matrix[2][0] + yn * zeus_matrix[2][1] + zn * zeus_matrix[2][2];
-
-			// Normalize normal
-			float nx = rotn_x / 65536.0f;
-			float ny = rotn_y / 65536.0f;
-			float nz = rotn_z / 65536.0f;
-			float nlen = std::sqrt(nx*nx + ny*ny + nz*nz);
-			if (nlen > 0.0001f) {
-				nx /= nlen;
-				ny /= nlen;
-				nz /= nlen;
-			}
-
-			// Compute light direction as vector from vertex to light position
-			float vx = (float)x / 65536.0f;
-			float vy = (float)y / 65536.0f;
-			float vz = (float)z / 65536.0f;
-
-			float lightx = (float)m_state.m_zeus_light[0];
-			float lighty = (float)m_state.m_zeus_light[1];
-			float lightz = (float)m_state.m_zeus_light[2];
-
-			float lx = lightx - vx;
-			float ly = lighty - vy;
-			float lz = lightz - vz;
-
-			float llen = std::sqrt(lx*lx + ly*ly + lz*lz);
-			if (llen > 0.0001f) {
-				lx /= llen;
-				ly /= llen;
-				lz /= llen;
-			}
-
-			// Lambertian diffuse
-			float diffuse = nx*lx + ny*ly + nz*lz;
-			if (diffuse < 0.0f) diffuse = 0.0f;
-			if (diffuse > 1.0f) diffuse = 1.0f;
-
-			// Log vertex and light info for debugging
-			// if (logit)
-			// {
-			// 	m_state.logerror("\nLighting: diffuse=%f vx=%f vy=%f vz=%f   m_zeus_light=(%f,%f,%f)   xo=%f yo=%f zo=%f   lx=%f ly=%f lz=%f\n",
-			// 		diffuse, vx, vy, vz, lightx, lighty, lightz, xo, yo, zo, lx, ly, lz);
-			// }
-
-			if (m_state.lighting_algorithm == 2) 
-			{
-				// Exponentially increase diffuse intensity
-				diffuse = std::pow(diffuse, 0.5);
-			}
-
-			// Add ambient
-			float ambient = 0.05f;
-			//float intensity = ambient + (1.0f - ambient) * diffuse;
-			float intensity = ambient + diffuse;
-			
-			// if (m_state.lighting_algorithm == 2) 
-			// {
-			// 	// Exponentially increase intensity
-			// 	intensity = std::pow(intensity, 0.50);
-			// }
-
-			// Clamp intensity
-			if (intensity > 1.0f) intensity = 1.0f;
-
-			// Store as per-vertex intensity
-			vert[i].p[3] = (uint32_t)(intensity * 0xffff);
-		}
+            calculate_lighting_algorithm_1(databuffer, i, zeus_matrix, x, y, z, vert);
+        }
+		else if (long_fmt && m_state.lighting_enabled && m_state.lighting_algorithm < 6)
+		{
+            calculate_lighting_algorithm_2(databuffer, i, zeus_matrix, x, y, z, vert);
+        }
 		else
 		{
 			vert[i].p[3] = 0xffff;
@@ -1304,6 +1246,231 @@ void midzeus_renderer::zeus_draw_quad(int long_fmt, const uint32_t *databuffer, 
 	m_state.m_poly->render_polygon<4, 4>(m_state.m_zeus_cliprect,
 							render_delegate(&midzeus_renderer::render_poly, this),
 							clipvert);
+}
+
+void midzeus_renderer::calculate_lighting_algorithm_1(const uint32_t *databuffer, uint32_t i, int16_t zeus_matrix[3][3], int64_t x, int64_t y, int64_t z, poly_vertex vert[4])
+{
+	// Directional lighting using per-vertex normal
+	uint32_t inormal = databuffer[10 + i];
+	int32_t xn = util::sext((inormal >>  0) & 0x3ff, 10);
+	int32_t yn = util::sext((inormal >> 10) & 0x3ff, 10);
+	int32_t zn = util::sext((inormal >> 20) & 0x3ff, 10);
+
+	// Transforms normal into screen space
+	int32_t rotn_x = xn * zeus_matrix[0][0] + yn * zeus_matrix[0][1] + zn * zeus_matrix[0][2];
+	int32_t rotn_y = xn * zeus_matrix[1][0] + yn * zeus_matrix[1][1] + zn * zeus_matrix[1][2];
+	int32_t rotn_z = xn * zeus_matrix[2][0] + yn * zeus_matrix[2][1] + zn * zeus_matrix[2][2];
+
+	// Normalize normal
+	float nx = rotn_x / 65536.0f;
+	float ny = rotn_y / 65536.0f;
+	float nz = rotn_z / 65536.0f;
+	float nlen = std::sqrt(nx*nx + ny*ny + nz*nz);
+	if (nlen > 0.0001f) {
+		nx /= nlen;
+		ny /= nlen;
+		nz /= nlen;
+	}
+
+	// Compute light direction as vector from vertex to light position
+	float vx = (float)x / 65536.0f;
+	float vy = (float)y / 65536.0f;
+	float vz = (float)z / 65536.0f;
+
+	float lightx = (float)m_state.m_zeus_light[0];
+	float lighty = (float)m_state.m_zeus_light[1];
+	float lightz = (float)m_state.m_zeus_light[2];
+
+	float lx = lightx - vx;
+	float ly = lighty - vy;
+	float lz = lightz - vz;
+
+	float llen = std::sqrt(lx*lx + ly*ly + lz*lz);
+	if (llen > 0.0001f) {
+		lx /= llen;
+		ly /= llen;
+		lz /= llen;
+	}
+
+	// Lambertian diffuse
+	float diffuse = nx*lx + ny*ly + nz*lz;
+	if (diffuse < 0.0f) diffuse = 0.0f;
+	if (diffuse > 1.0f) diffuse = 1.0f;
+
+	// Log vertex and light info for debugging
+	// if (logit)
+	// {
+	// 	m_state.logerror("\nLighting: diffuse=%f vx=%f vy=%f vz=%f   m_zeus_light=(%f,%f,%f)   xo=%f yo=%f zo=%f   lx=%f ly=%f lz=%f\n",
+	// 		diffuse, vx, vy, vz, lightx, lighty, lightz, xo, yo, zo, lx, ly, lz);
+	// }
+
+	if (m_state.lighting_algorithm == 2) 
+	{
+		// Exponentially increase diffuse intensity
+		diffuse = std::pow(diffuse, 0.5);
+	}
+
+	// Add ambient
+	float ambient = 0.05f;
+	//float intensity = ambient + (1.0f - ambient) * diffuse;
+	float intensity = ambient + diffuse;
+	
+	// if (m_state.lighting_algorithm == 2) 
+	// {
+	// 	// Exponentially increase intensity
+	// 	intensity = std::pow(intensity, 0.50);
+	// }
+
+	// Clamp intensity
+	if (intensity > 1.0f) intensity = 1.0f;
+
+	// Store as per-vertex intensity
+	vert[i].p[3] = (uint32_t)(intensity * 0xffff);
+}
+
+void midzeus_renderer::calculate_lighting_algorithm_2(const uint32_t *databuffer, uint32_t i, int16_t zeus_matrix[3][3], int64_t x, int64_t y, int64_t z, poly_vertex vert[4])
+{
+    // Directional lighting using per-vertex normal
+    uint32_t inormal = databuffer[10 + i];
+    int32_t xn = util::sext((inormal >> 0) & 0x3ff, 10);
+    int32_t yn = util::sext((inormal >> 10) & 0x3ff, 10);
+    int32_t zn = util::sext((inormal >> 20) & 0x3ff, 10);
+
+    // Transforms normal into screen space
+    int32_t rotn_x = xn * zeus_matrix[0][0] + yn * zeus_matrix[0][1] + zn * zeus_matrix[0][2];
+    int32_t rotn_y = xn * zeus_matrix[1][0] + yn * zeus_matrix[1][1] + zn * zeus_matrix[1][2];
+    int32_t rotn_z = xn * zeus_matrix[2][0] + yn * zeus_matrix[2][1] + zn * zeus_matrix[2][2];
+
+    // Normalize normal
+    float nx = rotn_x / 65536.0f;
+    float ny = rotn_y / 65536.0f;
+    float nz = rotn_z / 65536.0f;
+    float nlen = sqrtf(nx * nx + ny * ny + nz * nz);
+    if (nlen > 0.0001f)
+    {
+        nx /= nlen;
+        ny /= nlen;
+        nz /= nlen;
+    }
+
+    // Compute light direction as vector from vertex to light position
+    float vx = (float)x / 65536.0f;
+    float vy = (float)y / 65536.0f;
+    float vz = (float)z / 65536.0f;
+
+    // lightx = (float)m_state.m_zeus_light[0];
+    // lighty = (float)m_state.m_zeus_light[1];
+    // lightz = (float)m_state.m_zeus_light[2];
+
+    // Transform light position by inverse of zeus_matrix
+    // zeus_apply_inverse_matrix(zeus_matrix, lightx, lighty, lightz);
+
+    if (m_state.machine().input().code_pressed(KEYCODE_I))
+    {
+        lightz += 0.001f;
+    }
+    else if (m_state.machine().input().code_pressed(KEYCODE_K))
+    {
+        lightz -= 0.001f;
+    }
+    else if (m_state.machine().input().code_pressed(KEYCODE_L))
+    {
+        lightx += 0.001f;
+    }
+    else if (m_state.machine().input().code_pressed(KEYCODE_J))
+    {
+        lightx -= 0.001f;
+    }
+    else if (m_state.machine().input().code_pressed(KEYCODE_U))
+    {
+        lighty += 0.001f;
+    }
+    else if (m_state.machine().input().code_pressed(KEYCODE_H))
+    {
+        lighty -= 0.001f;
+    }
+    else if (m_state.machine().input().code_pressed(KEYCODE_P))
+    {
+        maxLightDistance += 0.01f;
+        if (maxLightDistance > 100000.0f)
+            maxLightDistance = 100000.0f;
+    }
+    else if (m_state.machine().input().code_pressed(KEYCODE_O))
+    {
+        maxLightDistance -= 0.01f;
+        if (maxLightDistance <= 0.0f)
+            maxLightDistance = 0.01f;
+    }
+    else if (m_state.machine().input().code_pressed_once(KEYCODE_Y))
+    {
+        osd_printf_verbose("Light=%f,%f,%f   Vertex=%f,%f,%f   MaxDistance=%f\n   ZeusLight=", lightx, lighty, lightz, vx, vy, vz, maxLightDistance);
+    }
+
+    float lx = lightx - vx;
+    float ly = lighty - vy;
+    float lz = lightz - vz;
+
+    float llen = sqrtf(lx * lx + ly * ly + lz * lz);
+    if (llen > 0.0001f)
+    {
+        lx /= llen;
+        ly /= llen;
+        lz /= llen;
+    }
+
+    // Lambertian diffuse
+    float diffuse = nx * lx + ny * ly + nz * lz;
+    if (diffuse < 0.0f)
+        diffuse = 0.0f;
+    if (diffuse > 1.0f)
+        diffuse = 1.0f;
+
+    // Log vertex and light info for debugging
+    // if (logit)
+    // {
+    // 	m_state.logerror("\nLighting: diffuse=%f vx=%f vy=%f vz=%f   m_zeus_light=(%f,%f,%f)   xo=%f yo=%f zo=%f   lx=%f ly=%f lz=%f\n",
+    // 		diffuse, vx, vy, vz, lightx, lighty, lightz, xo, yo, zo, lx, ly, lz);
+    // }
+
+    if (m_state.lighting_algorithm == 2)
+    {
+        // Exponentially increase diffuse intensity
+        diffuse = std::pow(diffuse, 0.5);
+    }
+
+    // if (llen >= maxLightDistance)
+    // 	llen = maxLightDistance;
+    // float attenuation = 1.0f - (llen / maxLightDistance);
+    // float attenuation = 1.0f / (1.0f + (llen * llen) / (maxLightDistance * maxLightDistance));
+    // float attenuation = exp(-llen / maxLightDistance); // Exponential decay
+    // float attenuation = 1.0/(1.0 + llen * llen);
+    float attenuation = 1.0 - llen / maxLightDistance;
+    attenuation = std::clamp(attenuation, 0.0f, 1.0f);
+    attenuation *= attenuation;
+
+    // Add ambient
+    float ambient = 0.5f;
+    // float intensity = ambient + (1.0f - ambient) * diffuse;
+    // float intensity = ambient + diffuse * attenuation;
+    float intensity = ambient + diffuse * attenuation;
+
+    // if (m_state.lighting_algorithm == 2)
+    // {
+    // 	// Exponentially increase intensity
+    // 	intensity = std::pow(intensity, 0.50);
+    // }
+
+    // Clamp intensity
+    if (intensity > 1.0f)
+        intensity = 1.0f;
+
+    // if (vz < 2000.0f)
+    // {
+    // 	intensity = 1.0f;
+    // }
+
+    // Store as per-vertex intensity
+    vert[i].p[3] = (uint32_t)(intensity * 0xffff);
 }
 
 void midzeus_renderer::zeus_draw_debug_quad(const rectangle& rect, const vertex_t *vert)
